@@ -44,10 +44,6 @@
   #include "../../gcode/parser.h"
 #endif
 
-#if HAS_CUTTER
-  #include "../../feature/spindle_laser.h"
-#endif
-
 #if ENABLED(SDSUPPORT)
   #include "../../sd/cardreader.h"
 #endif
@@ -69,7 +65,6 @@
 
 #define DO_DRAW_LOGO (STATUS_LOGO_WIDTH && ENABLED(CUSTOM_STATUS_SCREEN_IMAGE))
 #define DO_DRAW_HOTENDS (HOTENDS > 0)
-#define DO_DRAW_CUTTER (HAS_CUTTER)
 #define DO_DRAW_BED (HAS_HEATED_BED && STATUS_BED_WIDTH && HOTENDS <= 4)
 #define DO_DRAW_CHAMBER (HAS_TEMP_CHAMBER && STATUS_CHAMBER_WIDTH && HOTENDS <= 4)
 #define DO_DRAW_FAN (HAS_FAN0 && STATUS_FAN_WIDTH && HOTENDS <= 4 && defined(STATUS_FAN_FRAMES))
@@ -77,44 +72,33 @@
 #define ANIM_HOTEND (HOTENDS && ENABLED(STATUS_HOTEND_ANIM))
 #define ANIM_BED (DO_DRAW_BED && ENABLED(STATUS_BED_ANIM))
 #define ANIM_CHAMBER (DO_DRAW_CHAMBER && ENABLED(STATUS_CHAMBER_ANIM))
-#define ANIM_CUTTER (DO_DRAW_CUTTER && ENABLED(STATUS_CUTTER_ANIM))
 
-#define ANIM_HBCC (ANIM_HOTEND || ANIM_BED || ANIM_CHAMBER || ANIM_CUTTER)
+#define ANIM_HBC (ANIM_HOTEND || ANIM_BED || ANIM_CHAMBER)
 
-#if ANIM_HBCC
-  enum HeatBits : uint8_t {
-    HEATBIT_HOTEND,
-    HEATBIT_BED = HOTENDS,
-    HEATBIT_CHAMBER,
-    HEATBIT_CUTTER
-  };
-  IF<(HEATBIT_CUTTER > 7), uint16_t, uint8_t>::type heat_bits;
+#if ANIM_HBC
+  uint8_t heat_bits;
 #endif
 #if ANIM_HOTEND
-  #define HOTEND_ALT(N) TEST(heat_bits, HEATBIT_HOTEND + N)
+  #define HOTEND_ALT(N) TEST(heat_bits, N)
 #else
   #define HOTEND_ALT(N) false
 #endif
 #if ANIM_BED
-  #define BED_ALT() TEST(heat_bits, HEATBIT_BED)
+  #define BED_ALT() TEST(heat_bits, 7)
 #else
   #define BED_ALT() false
 #endif
 #if ANIM_CHAMBER
-  #define CHAMBER_ALT() TEST(heat_bits, HEATBIT_CHAMBER)
+  #define CHAMBER_ALT() TEST(heat_bits, 6)
 #else
   #define CHAMBER_ALT() false
 #endif
-#if ANIM_CUTTER
-  #define CUTTER_ALT(N) TEST(heat_bits, HEATBIT_CUTTER)
-#else
-  #define CUTTER_ALT() false
+
+#if HOTENDS
+  #define MAX_HOTEND_DRAW _MIN(HOTENDS, ((LCD_PIXEL_WIDTH - (STATUS_LOGO_BYTEWIDTH + STATUS_FAN_BYTEWIDTH) * 8) / (STATUS_HEATERS_XSPACE)))
 #endif
 
-#if DO_DRAW_HOTENDS
-  #define MAX_HOTEND_DRAW _MIN(HOTENDS, ((LCD_PIXEL_WIDTH - (STATUS_LOGO_BYTEWIDTH + STATUS_FAN_BYTEWIDTH) * 8) / (STATUS_HEATERS_XSPACE)))
-  #define STATUS_HEATERS_BOT (STATUS_HEATERS_Y + STATUS_HEATERS_HEIGHT - 1)
-#endif
+#define STATUS_HEATERS_BOT (STATUS_HEATERS_Y + STATUS_HEATERS_HEIGHT - 1)
 
 #define PROGRESS_BAR_X 54
 #define PROGRESS_BAR_WIDTH (LCD_PIXEL_WIDTH - PROGRESS_BAR_X)
@@ -128,8 +112,7 @@ FORCE_INLINE void _draw_centered_temp(const int16_t temp, const uint8_t tx, cons
 
 #if DO_DRAW_HOTENDS
 
-  // Draw hotend bitmap with current and target temperatures
-  FORCE_INLINE void _draw_hotend_status(const heater_ind_t heater, const bool blink) {
+  FORCE_INLINE void _draw_heater_status(const heater_ind_t heater, const bool blink) {
     #if !HEATER_IDLE_HANDLER
       UNUSED(blink);
     #endif
@@ -220,7 +203,8 @@ FORCE_INLINE void _draw_centered_temp(const int16_t temp, const uint8_t tx, cons
 
     if (PAGE_UNDER(7)) {
       #if HEATER_IDLE_HANDLER
-        const bool dodraw = (blink || !thermalManager.hotend_idle[heater].timed_out);
+        const bool is_idle = thermalManager.hotend_idle[heater].timed_out,
+                   dodraw = (blink || !is_idle);
       #else
         constexpr bool dodraw = true;
       #endif
@@ -238,11 +222,10 @@ FORCE_INLINE void _draw_centered_temp(const int16_t temp, const uint8_t tx, cons
 
   }
 
-#endif // DO_DRAW_HOTENDS
+#endif // HOTENDS
 
 #if DO_DRAW_BED
 
-  // Draw bed bitmap with current and target temperatures
   FORCE_INLINE void _draw_bed_status(const bool blink) {
     #if !HEATER_IDLE_HANDLER
       UNUSED(blink);
@@ -261,6 +244,20 @@ FORCE_INLINE void _draw_centered_temp(const int16_t temp, const uint8_t tx, cons
     #else
       #define STATIC_BED    false
       #define BED_DOT       false
+    #endif
+
+    #if ANIM_HOTEND && BOTH(STATUS_HOTEND_INVERTED, STATUS_HOTEND_NUMBERLESS)
+      #define OFF_BMP(N) status_hotend_b_bmp
+      #define ON_BMP(N)  status_hotend_a_bmp
+    #elif ANIM_HOTEND && DISABLED(STATUS_HOTEND_INVERTED) && ENABLED(STATUS_HOTEND_NUMBERLESS)
+      #define OFF_BMP(N) status_hotend_a_bmp
+      #define ON_BMP(N)  status_hotend_b_bmp
+    #elif ANIM_HOTEND && ENABLED(STATUS_HOTEND_INVERTED)
+      #define OFF_BMP(N) status_hotend##N##_b_bmp
+      #define ON_BMP(N)  status_hotend##N##_a_bmp
+    #else
+      #define OFF_BMP(N) status_hotend##N##_a_bmp
+      #define ON_BMP(N)  status_hotend##N##_b_bmp
     #endif
 
     if (PAGE_CONTAINS(STATUS_HEATERS_Y, STATUS_HEATERS_BOT)) {
@@ -291,7 +288,8 @@ FORCE_INLINE void _draw_centered_temp(const int16_t temp, const uint8_t tx, cons
 
     if (PAGE_UNDER(7)) {
       #if HEATER_IDLE_HANDLER
-        const bool dodraw = (blink || !thermalManager.bed_idle.timed_out);
+        const bool is_idle = thermalManager.bed_idle.timed_out,
+                   dodraw = (blink || !is_idle);
       #else
         constexpr bool dodraw = true;
       #endif
@@ -399,19 +397,16 @@ void MarlinUI::draw_status_screen() {
 
   // At the first page, generate new display values
   if (first_page) {
-    #if ANIM_HBCC
+    #if ANIM_HBC
       uint8_t new_bits = 0;
       #if ANIM_HOTEND
-        HOTEND_LOOP() if (thermalManager.isHeatingHotend(e)) SBI(new_bits, HEATBIT_HOTEND + e);
+        HOTEND_LOOP() if (thermalManager.isHeatingHotend(e) ^ SHOW_ON_STATE) SBI(new_bits, e);
       #endif
       #if ANIM_BED
-        if (thermalManager.isHeatingBed()) SBI(new_bits, HEATBIT_BED);
+        if (thermalManager.isHeatingBed() ^ SHOW_ON_STATE) SBI(new_bits, 7);
       #endif
       #if DO_DRAW_CHAMBER && HAS_HEATED_CHAMBER
-        if (thermalManager.isHeatingChamber()) SBI(new_bits, HEATBIT_CHAMBER);
-      #endif
-      #if ANIM_CUTTER
-        if (cutter.enabled()) SBI(new_bits, HEATBIT_CUTTER);
+        if (thermalManager.isHeatingChamber() ^ SHOW_ON_STATE) SBI(new_bits, 6);
       #endif
       heat_bits = new_bits;
     #endif
@@ -524,18 +519,6 @@ void MarlinUI::draw_status_screen() {
       u8g.drawBitmapP(STATUS_HEATERS_X, STATUS_HEATERS_Y, STATUS_HEATERS_BYTEWIDTH, STATUS_HEATERS_HEIGHT, status_heaters_bmp);
   #endif
 
-  #if DO_DRAW_CUTTER
-    #if ANIM_CUTTER
-      #define CUTTER_BITMAP(S) ((S) ? status_cutter_on_bmp : status_cutter_bmp)
-    #else
-      #define CUTTER_BITMAP(S) status_cutter_bmp
-    #endif
-    const uint8_t cuttery = STATUS_CUTTER_Y(CUTTER_ALT()),
-                  cutterh = STATUS_CUTTER_HEIGHT(CUTTER_ALT());
-    if (PAGE_CONTAINS(cuttery, cuttery + cutterh - 1))
-      u8g.drawBitmapP(STATUS_CUTTER_X, cuttery, STATUS_CUTTER_BYTEWIDTH, cutterh, CUTTER_BITMAP(CUTTER_ALT()));
-  #endif
-
   #if DO_DRAW_BED && DISABLED(STATUS_COMBINE_HEATERS)
     #if ANIM_BED
       #define BED_BITMAP(S) ((S) ? status_bed_on_bmp : status_bed_bmp)
@@ -589,25 +572,16 @@ void MarlinUI::draw_status_screen() {
   //
   if (PAGE_UNDER(6 + 1 + 12 + 1 + 6 + 1)) {
     // Extruders
-    #if DO_DRAW_HOTENDS
+    #if HOTENDS
       for (uint8_t e = 0; e < MAX_HOTEND_DRAW; ++e)
-        _draw_hotend_status((heater_ind_t)e, blink);
+        _draw_heater_status((heater_ind_t)e, blink);
     #endif
 
-    // Laser / Spindle
-    #if DO_DRAW_CUTTER
-      if (cutter.power && PAGE_CONTAINS(STATUS_CUTTER_TEXT_Y - INFO_FONT_ASCENT, STATUS_CUTTER_TEXT_Y - 1)) {
-        lcd_put_u8str(STATUS_CUTTER_TEXT_X, STATUS_CUTTER_TEXT_Y, i16tostr3(cutter.powerPercent(cutter.power)));
-        lcd_put_wchar('%');
-      }
-    #endif
-
-    // Heated Bed
-    #if DO_DRAW_BED
+    // Heated bed
+    #if DO_DRAW_BED && DISABLED(STATUS_COMBINE_HEATERS) || (HAS_HEATED_BED && ENABLED(STATUS_COMBINE_HEATERS) && HOTENDS <= 4)
       _draw_bed_status(blink);
     #endif
 
-    // Heated Chamber
     #if DO_DRAW_CHAMBER
       _draw_chamber_status();
     #endif
